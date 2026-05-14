@@ -130,6 +130,9 @@ class ShopifyChecker:
         self.graphql_base              = None
         self._last_responses           = []
         self._verbose                  = False
+        self.build_id                  = '4663384ede457d59be87980de7797171b19f2a1b'
+        self.pci_build_hash            = 'a8e4a94'
+        self._3ds_wait_count           = 0
 
     def _track_response(self, text):
         self._last_responses.append(text)
@@ -199,6 +202,8 @@ class ShopifyChecker:
         self._log("STEP 3 — Finding cheapest available product ...")
         try:
             r = self.session.get(f"{self.base_url}/products.json", headers=self.headers)
+            if r.status_code != 200:
+                return False
             products = r.json().get('products', [])
             cheapest_variant = None
             min_price = float('inf')
@@ -214,7 +219,8 @@ class ShopifyChecker:
                 self.variant_id = cheapest_variant['id']
                 return True
             return False
-        except:
+        except Exception as e:
+            self._log(f"Error in find_cheapest_product: {e}")
             return False
 
     def add_to_cart(self):
@@ -226,12 +232,18 @@ class ShopifyChecker:
         headers['x-requested-with'] = 'XMLHttpRequest'
         headers['origin'] = self.base_url
         data = {'id': self.variant_id, 'quantity': 1, 'form_type': 'product', 'utf8': '✓'}
-        r = self.session.post(url, data=data, headers=headers)
-        if r.status_code == 200:
-            j = r.json()
-            self.cart_token = j.get('cart_token', self.cart_token)
-            return True
-        return False
+        try:
+            r = self.session.post(url, data=data, headers=headers)
+            if r.status_code == 200:
+                j = r.json()
+                self.cart_token = j.get('cart_token', self.cart_token)
+                return True
+            else:
+                self._log(f"add_to_cart failed with status {r.status_code}: {r.text[:200]}")
+                return False
+        except Exception as e:
+            self._log(f"Error in add_to_cart: {e}")
+            return False
 
     def monorail_produce(self):
         url = f"{self.base_url}/.well-known/shopify/monorail/v1/produce"
@@ -1136,10 +1148,10 @@ class ShopifyChecker:
             pass
 
     def check_card(self, site, cc_line):
-        self.__init__(base_url=site)
+        # Reinitialize with new site
         if not site.startswith('http'):
             site = 'https://' + site
-        self.base_url = site.rstrip('/')
+        self.__init__(base_url=site.rstrip('/'))
 
         if not self.get_initial_session():
             return ("ERROR", cc_line, "Session init failed")
